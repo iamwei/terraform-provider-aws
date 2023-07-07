@@ -235,13 +235,35 @@ func resourceClusterParameterGroupUpdate(ctx context.Context, d *schema.Resource
 		os := o.(*schema.Set)
 		ns := n.(*schema.Set)
 
-		// Expand the "parameter" set to aws-sdk-go compat []rds.Parameter.
-		for _, chunk := range slices.Chunks(expandParameters(ns.Difference(os).List()), maxParamModifyChunk) {
+		noncollationParameters := map[string]*rds.Parameter{}
+		collationParameters := map[string]*rds.Parameter{}
+
+		for _, p := range expandParameters(ns.List()) {
+			if *p.ParameterName == "collation_connection" || *p.ParameterName == "collation_server" {
+				collationParameters[*p.ParameterName] = p
+			} else {
+				noncollationParameters[*p.ParameterName] = p
+			}
+		}
+
+		// Modify non-collation parameters first
+		for _, chunk := range slices.Chunks(maps.Values(noncollationParameters), maxParamModifyChunk) {
 			input := &rds.ModifyDBClusterParameterGroupInput{
 				DBClusterParameterGroupName: aws.String(d.Id()),
 				Parameters:                  chunk,
 			}
+			_, err := conn.ModifyDBClusterParameterGroupWithContext(ctx, input)
+			if err != nil {
+				return sdkdiag.AppendErrorf(diags, "modifying DB Cluster Parameter Group (%s): %s", d.Id(), err)
+			}
+		}
 
+		// modify collation parameters
+		for _, chunk := range slices.Chunks(maps.Values(collationParameters), maxParamModifyChunk) {
+			input := &rds.ModifyDBClusterParameterGroupInput{
+				DBClusterParameterGroupName: aws.String(d.Id()),
+				Parameters:                  chunk,
+			}
 			_, err := conn.ModifyDBClusterParameterGroupWithContext(ctx, input)
 			if err != nil {
 				return sdkdiag.AppendErrorf(diags, "modifying DB Cluster Parameter Group (%s): %s", d.Id(), err)
